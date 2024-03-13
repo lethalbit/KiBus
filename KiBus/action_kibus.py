@@ -29,6 +29,9 @@ import os
 import logging
 import sys
 import timeit
+import tempfile
+from pathlib import Path
+
 from packaging import version
 from typing import Union
 
@@ -42,20 +45,25 @@ else:
 
 SCALE = 1000000.0
 
+KIBUS_PATH = Path(__file__).resolve().parent
+
 # get version information
-version_filename = os.path.join(os.path.dirname(os.path.realpath(__file__)), "version.txt")
-with open(version_filename) as f:
+with (KIBUS_PATH / 'version.txt').open('r') as f:
     VERSION = f.readline().strip()
+
 
 # > V5.1.5 and V 5.99 build information
 if hasattr(pcbnew, 'GetBuildVersion'):
     BUILD_VERSION = pcbnew.GetBuildVersion()
-    kicad_version = version.parse(BUILD_VERSION.strip("()").split("-")[0])
+    KICAD_VERSION = version.parse(BUILD_VERSION.strip("()").split("-")[0])
 else:
     BUILD_VERSION = "Unknown"
-    kicad_version = version.Version("0.0.0")
+    KICAD_VERSION = version.Version("0.0.0")
 
-is_kicad_stable = kicad_version < version.Version("5.99.0")
+# Rather than checking against a fixed version number, just check the minor
+# number to see if it's less than 99, if so then we're on a stable build.
+IS_KICAD_STABLE = KICAD_VERSION.minor < 99
+IS_KICAD_5      = KICAD_VERSION.major <= 5
 
 def median(x: Union[int, float]) -> float:
     """Return median from a list of values.
@@ -358,13 +366,23 @@ class KiBus(pcbnew.ActionPlugin):
         self.description = "A helper dialog that displays bus signal lengts with comparison and sorting"
         self.icon_file_name = os.path.join(
                 os.path.dirname(__file__), 'kibus-icon.png')
-                
+
     def Run(self):
         # load board
         board = pcbnew.GetBoard()
 
-        # go to the project folder - so that log will be in proper place
-        os.chdir(os.path.dirname(os.path.abspath(board.GetFileName())))
+        # Get the directory of the PCB open in pcbnew
+        log_dir = Path(board.GetFileName()).resolve().parent
+        # NOTE(aki): GetFileName() can possibly return '', when we resolve this path
+        # and get the parent it can result in a directory we don't have write permissions
+        # to, so we need to check that we can actually write there.
+        if not os.access(log_dir, os.W_OK):
+            # If we can't write to that directory, set it to somewhere we can write to (/tmp)
+            log_dir = Path(tempfile.gettempdir()).resolve()
+
+        # Once we have a properly resolved writable path we can set the log file path to use
+        log_file = (log_dir / 'kibus.log')
+
 
         # Remove all handlers associated with the root logger object.
         for handler in logging.root.handlers[:]:
@@ -372,7 +390,7 @@ class KiBus(pcbnew.ActionPlugin):
 
         # set up logger
         logging.basicConfig(level=logging.DEBUG,
-                            filename="kibus.log",
+                            filename=log_file,
                             filemode='w',
                             format='%(asctime)s %(name)s %(lineno)d:%(message)s',
                             datefmt='%m-%d %H:%M:%S')
@@ -390,7 +408,8 @@ class KiBus(pcbnew.ActionPlugin):
         sl_err = StreamToLogger(stderr_logger, logging.ERROR)
         sys.stderr = sl_err
 
-        if is_kicad_stable:
+        # The name is only pcbnew in KiCad 5 or older
+        if IS_KICAD_5:
             _pcbnew_frame = [x for x in wx.GetTopLevelWindows() if x.GetTitle().lower().startswith('pcbnew')][0]
         else:
             _pcbnew_frame = [x for x in wx.GetTopLevelWindows() if x.GetTitle().lower().endswith('pcb editor')][0]
@@ -401,7 +420,7 @@ class KiBus(pcbnew.ActionPlugin):
 
         nets.update([track.GetNetname() for track in selected_tracks])
 
-        if is_kicad_stable:
+        if IS_KICAD_5:
             modules = board.GetModules()
         else:
             modules = board.GetFootprints()

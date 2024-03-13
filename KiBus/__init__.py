@@ -4,8 +4,10 @@ try:
     # Instantiate and register to Pcbnew
     KiBus().register()
 except Exception as e:
-    import os
-    plugin_dir = os.path.dirname(os.path.realpath(__file__))
-    log_file = os.path.join(plugin_dir, 'kibus_error.log')
-    with open(log_file, 'w') as f:
+    from pathlib import Path
+
+    kibus_path = Path(__file__).resolve().parent
+    log_file = kibus_path / 'kibus_error.log'
+
+    with log_file.open('w') as f:
         f.write(repr(e))
